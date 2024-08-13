@@ -1,0 +1,16 @@
+[package]
+name = "eragon"
+upgrade_policy = "compatible"
+version = "1.0.0"
+authors = []
+
+[addresses]
+eragon = "_"
+aptos_framework = "0x1"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", rev = "main", subdir = "aptos-move/framework/aptos-framework" }
+AptosTokenObjects = { git = 'https://github.com/aptos-labs/aptos-core.git', rev = 'main', subdir = 'aptos-move/framework/aptos-token-objects' }
+AptosToken = { git = 'https://github.com/aptos-labs/aptos-core.git', rev = 'main', subdir = 'aptos-move/framework/aptos-token' }
+
+# local="../../aptos-core/aptos-move/framework/aptos-framework"
