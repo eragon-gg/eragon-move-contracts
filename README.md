@@ -27,15 +27,14 @@ This is source code smart contract on Aptos blockchain.It provide common on-chai
 ### Compiles
 ```
 aptos move compile --named-addresses eragon=deployer
-
+```
 ### Deploy
 ```
 aptos move publish --named-addresses eragon=deployer
-
+```
 ### Initial config
 ```
 cd scripts
-```
 ./all.sh
 ```
 Now this smart contract ready to use
