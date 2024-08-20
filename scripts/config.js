@@ -7,8 +7,8 @@ const readConfig = async () => {
   const file = fs.readFileSync("../.aptos/config.yaml", "utf8");
   const config = YAML.parse(file);
 
-  const GAME_CONTRACT_ADDR = config.profiles.default.account;
-  const ADMIN_PRIV_KEY = config.profiles.default.private_key;
+  const GAME_CONTRACT_ADDR = config.profiles.deployer.account;
+  const ADMIN_PRIV_KEY = config.profiles.deployer.private_key;
   const adminPrivKey = new Ed25519PrivateKey(ADMIN_PRIV_KEY);
   const admin = Account.fromPrivateKey({ privateKey: adminPrivKey });
 

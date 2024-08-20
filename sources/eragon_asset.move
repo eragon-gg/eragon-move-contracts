@@ -385,7 +385,7 @@ module eragon::eragon_asset {
             }
         );
     }
-    // NFT or Fungible Metatada
+    // NFT
     fun get_nft_asset_id<T: key>(token: Object<T>): AssetId {
 
         let token_addr = object::object_address(&token);

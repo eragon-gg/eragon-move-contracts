@@ -10,5 +10,5 @@ echo "------ Set seasons"
 node set-seasons.js
 echo "------ Set rewards"
 node set-rewards.js
-echo "------ Faucet"
-node faucet-ra.js
+#echo "------ Faucet"
+#node faucet-ra.js
