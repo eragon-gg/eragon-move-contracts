@@ -52,3 +52,7 @@ Linktree - [@ERAGON_GG](https://linktr.ee/ERAGON_GG)
 ## Website
 
 Product: [@ERAGON_GG](https://eragon.gg)
+
+## Contact
+
+<p><a href="mailto:info@crescentshine.studio">Send email</a></p>
