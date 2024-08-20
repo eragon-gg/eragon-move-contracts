@@ -1,7 +1,7 @@
 module eragon::eragon_avatar {
     use std::simple_map::{Self, SimpleMap};
     use std::signer;
-    use std::string::String;
+    //use std::string::String;
     use std::error;
     use std::hash;
     use std::bcs::to_bytes;
@@ -43,6 +43,7 @@ module eragon::eragon_avatar {
     const E_ASSET_UNSUPPORT:u64 =600;
     const E_ASSET_TYPE_NOT_CONFIG: u64 =601;
     const E_ASSET_NOT_SET:u64 = 602;
+    const E_ASSET_UNSET_SET:u64 = 603;
     const E_PLAYER_ASSET_NOT_SET:u64 = 700;
     const E_PLAYER_ASSET_TYPE_NOT_FOUND: u64 =701;
     const EXPIRED_TIME: u64 = 120; // 2 minutes
@@ -58,8 +59,13 @@ module eragon::eragon_avatar {
         weight: vector<u64>
     }
     struct PlayerAsset has key,store,drop {
-        // asset type id -> number of asset type(i.e: collection Passport,token 1,token 2)
+        // asset type id -> number of asset type
         assets: SimpleMap<u64,u64>
+    }
+    //contain detail associate asset with avatar
+    struct TrackingAsset has key,store,drop {
+        // token id ->number
+        assets: SimpleMap<address,u64>
     }
     
     struct Message has copy, drop {
@@ -93,6 +99,11 @@ module eragon::eragon_avatar {
             assets: simple_map::new<u64,u64>()
         });
     }
+    fun initialize_tracking_asset(player: &signer){
+        move_to(player, TrackingAsset {
+            assets: simple_map::new<address,u64>()
+        });
+    }
     //using with case trusted by backend
     public entry fun set_default_weight(operator: &signer,default_weight: vector<u64>) acquires DefaultConfig {
         
@@ -119,19 +130,30 @@ module eragon::eragon_avatar {
             simple_map::upsert<u64,vector<u64>>(&mut nftConfig.equipment_weights, type_id,weight);
         }
     }
-    public(friend) fun set_asset(player: &signer,type_id: u64) acquires PlayerAsset {
+    public(friend) fun set_asset(player: &signer,type_id: u64,token_id: address) acquires PlayerAsset,TrackingAsset {
 
         let playerAddr = signer::address_of(player);
 
         if(!exists<PlayerAsset>(playerAddr)){
             initialize_player_asset(player);
         };
+        if(!exists<TrackingAsset>(playerAddr)){
+            initialize_tracking_asset(player);
+        };
 
         let playerAsset = borrow_global_mut<PlayerAsset>(playerAddr);
-        simple_map::upsert<u64,u64>(&mut playerAsset.assets, type_id, 1);
-        
+        let found = simple_map::contains_key<u64,u64>(&playerAsset.assets, &type_id);
+        if(found){
+            let count = simple_map::borrow_mut<u64,u64>(&mut playerAsset.assets, &type_id);
+            *count = *count +1;
+        } else {
+            simple_map::add<u64,u64>(&mut playerAsset.assets, type_id, 1);
+        };
+        //add tracking
+        let trackingAsset = borrow_global_mut<TrackingAsset>(playerAddr);
+        simple_map::upsert<address,u64>(&mut trackingAsset.assets, token_id,type_id);
     }
-    public(friend) fun unset_asset(player: &signer,type_id: u64) acquires PlayerAsset {
+    public(friend) fun unset_asset(player: &signer,type_id: u64,token_id: address) acquires PlayerAsset,TrackingAsset {
 
         //
         let playerAddr = signer::address_of(player);
@@ -141,8 +163,21 @@ module eragon::eragon_avatar {
         let playerAsset = borrow_global_mut<PlayerAsset>(playerAddr);
         let found = simple_map::contains_key<u64,u64>(&playerAsset.assets,&type_id);
         assert!(found,error::invalid_state(E_ASSET_NOT_SET));
-        //remove
-        simple_map::remove<u64,u64>(&mut playerAsset.assets, &type_id);
+
+        //decreate count
+        let count = simple_map::borrow<u64,u64>(&playerAsset.assets, &type_id);
+        if(*count <= 1) {
+            simple_map::remove<u64,u64>(&mut playerAsset.assets, &type_id);
+        } else {
+            simple_map::upsert<u64,u64>(&mut playerAsset.assets, copy type_id, *count-1);
+        };
+        
+        let trackingAsset = borrow_global_mut<TrackingAsset>(playerAddr);
+        found = simple_map::contains_key<address,u64>(&trackingAsset.assets,&token_id);
+        assert!(found,error::invalid_state(E_ASSET_UNSET_SET));
+
+        //remove token tracking
+        simple_map::remove<address,u64>(&mut trackingAsset.assets, &token_id);
     }
     
     #[randomness]
@@ -179,7 +214,7 @@ module eragon::eragon_avatar {
         verify_signature(b"roll_profile_by", player_addr, asset_type_id, ts, rec_id, signature);
 
         //row index of weight
-        let randValue = random::random_by_weights(*current_weight);
+        let randValue = random::random_by(*current_weight);
 
         ensure_rand_result(player);
 
@@ -238,15 +273,16 @@ module eragon::eragon_avatar {
         );
     }
     #[view]
-    public fun get_associate_assets(player_addr: address): (vector<u64>) acquires PlayerAsset {
+    public fun get_associate_assets(player_addr: address): (vector<u64>,vector<address>) acquires TrackingAsset {
 
-        let asset_type_ids = vector::empty();
-        if(exists<PlayerAsset>(player_addr)){
+        let token_ids = vector::empty();
+        let type_ids = vector::empty();
+        if(exists<TrackingAsset>(player_addr)){
             //check asset type id has set for avatar
-            let playerAsset = borrow_global<PlayerAsset>(player_addr);
-            (asset_type_ids,_) = simple_map::to_vec_pair<u64,u64>(playerAsset.assets);
+            let trackingAsset = borrow_global<TrackingAsset>(player_addr);
+            (token_ids,type_ids) = simple_map::to_vec_pair<address,u64>(trackingAsset.assets);
         };
-        asset_type_ids
+        (type_ids,token_ids)
     }
     #[view]
     public fun get_profile_result(player_addr: address, timestamp: u64): (u64,u64) acquires RollResult {

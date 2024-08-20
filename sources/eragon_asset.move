@@ -11,14 +11,16 @@ module eragon::eragon_asset {
     use std::vector;
     use aptos_framework::event;
     use aptos_framework::account;
-    use aptos_framework::object::{Self,Object, ObjectCore};
-    use aptos_token_objects::aptos_token;
-    use aptos_token_objects::token::{Self as tokenv2, Token as TokenV2};
-    use aptos_token_objects::collection::{Self, Collection};
-    use aptos_token::token:: {Self as tokenv1, TokenId,TokenDataId};
+    use aptos_framework::object::{Self,Object};
+    use aptos_framework::primary_fungible_store;
+    use aptos_framework::dispatchable_fungible_asset;
+    use aptos_token_objects::token::{Self as tokenv2};
+    use aptos_token_objects::collection::{Self,Collection};
+    //use aptos_token::token:: {Self as tokenv1, TokenId};
+    use aptos_framework::fungible_asset::{Self, Metadata, FungibleAsset};
     use aptos_std::secp256k1::{ecdsa_recover, ecdsa_signature_from_bytes, ecdsa_raw_public_key_from_64_bytes};
 
-    use eragon::eragon_asset_type::{Self,CollectionId};
+    use eragon::eragon_asset_type::{Self};
     use eragon::eragon_avatar;
     use eragon::eragon_manager;
 
@@ -30,6 +32,13 @@ module eragon::eragon_asset {
     
     const SET_ASSET_FOR_NONCE: u64 =0;
     const SET_ASSET_FOR_AVATAR: u64 =2;
+
+    const NFT_IMPORT: u64 =1;
+    const NFT_EXPORT: u64 =2;
+    const SET_NFT_ASSET: u64 =3;
+    const UNSET_NFT_ASSET: u64 =4;
+    const FA_IMPORT: u64 =5;
+    const FA_EXPORT: u64 =6;
     
 
     const E_NOT_AUTHORIZED: u64 = 200;
@@ -52,18 +61,18 @@ module eragon::eragon_asset {
     const E_TOKEN_AMOUNT_NOT_ENOUGHT: u64 =509;
     const E_ASSET_NOT_IMPORT:u64 =510;
     const E_ASSET_NOT_FOUND: u64 =511;
-
+    const E_FA_IMPORT_NOT_EXIST :u64 =512;
+    const E_FA_IMPORT_NOT_ENOUGHT:u64 =513;
+    const E_FA_BALANCE_NOT_ENOUGHT: u64 =514;
+    const E_RA_BALANCE_NOT_ENOUGHT:u64 =515;
     const EXPIRED_TIME: u64 = 120; // 2 minutes
 
 
     struct AssetId has key,copy,store,drop {
         //asset type id
         type_id: u64,
-        name: String,
-        /// The version of the property map; when a fungible token v1 is mutated, a new property version is created and assigned to the token to make it an NFT
-        property_version: u64,
-        //store address of token v2
-        object_id: Option<address>
+        //store address of token nft or fungible
+        object_id: address
     }
     struct AssetVault has key,store {
         //token id ->  using for module such as avatar,game
@@ -79,7 +88,7 @@ module eragon::eragon_asset {
         func: vector<u8>,
         owner: address,
         asset_addr:address,
-        is_import: bool,
+        sig_type: u64,
         ts: u64
     }
 
@@ -88,7 +97,7 @@ module eragon::eragon_asset {
         owner: address,
         asset: AssetId,
         use_for: u64,
-        is_import:bool
+        event_type:u64
     }
 
     fun initialize_player_vault(player: &signer) {
@@ -104,41 +113,26 @@ module eragon::eragon_asset {
             }
         )
     }
-     // case asset require whilelist before import
-    public entry fun import_token_v1(
-        player: signer,
-        creator: address,
-        collection_name: String,
-        token_name: String,
-        property_version: u64,
-        amount: u64,
-        use_for: u64
-    ) acquires AssetVault {
-        let token_id = tokenv1::create_token_id_raw(creator, collection_name, token_name, property_version);
-        let asset_id = create_asset_id(creator,collection_name,token_name,property_version,option::none());
-
-        assert!(asset_id.type_id>0, error::permission_denied(E_ASSET_NOT_WHILE_LIST));
-
-        import_v1(&player,asset_id,token_id,amount,use_for);
-    }
     // case asset require whilelist before import
-    public entry fun import_token_v2<T: key>(player: &signer,token: Object<T>,use_for: u64) acquires AssetVault {
+    public entry fun import_digital_asset<T: key>(player: &signer,token: Object<T>,use_for: u64) acquires AssetVault {
 
         let  player_addr = signer::address_of(player);
         assert!(object::owner(token) == player_addr, error::invalid_state(E_NOT_OWNER_TOKEN));
 
-        let asset_id = get_asset_id(token);
+        let asset_id = get_nft_asset_id(token);
         //require while list
         assert!(asset_id.type_id>0, error::permission_denied(E_ASSET_NOT_WHILE_LIST));
         //transfer ownership
-        import_v2<T>(player,token,use_for); 
+        import_nft<T>(player,token,use_for); 
+
+        let token_addr = object::object_address(&token);
 
         if(use_for == SET_ASSET_FOR_AVATAR) {
-            eragon_avatar::set_asset(player,asset_id.type_id);
+            eragon_avatar::set_asset(player,asset_id.type_id,token_addr);
         };       
     }
-    // case token has been whilelist by backend
-    public entry fun import_sig_token_v2<T: key>(player: &signer,token: Object<T>,use_for: u64,ts: u64,rec_id: u8, signature: vector<u8>) acquires AssetVault {
+    // case token has been whilelist by backend token: 0x4::token::Token 
+    public entry fun import_digital_asset_sig<T: key>(player: &signer,token: Object<T>,use_for: u64,ts: u64,rec_id: u8, signature: vector<u8>) acquires AssetVault {
         
         let  player_addr = signer::address_of(player);
         
@@ -146,62 +140,106 @@ module eragon::eragon_asset {
 
         let token_addr = object::object_address(&token);
 
-        verify_signature(b"import_sig_token_v2",player_addr,token_addr,true,ts,rec_id,signature);
-
-        //first check token has been exist in asset type
-        let creator  = tokenv2::creator(token);
-        let collection_name = tokenv2::collection_name(token);
-        //add asset type for mgmt later
-        let asset_type_id=eragon_asset_type::upsert_asset_type(creator,collection_name);
+        verify_signature(b"import_digital_asset_sig",player_addr,token_addr,NFT_IMPORT,ts,rec_id,signature);
+        
+        let collectionObj = tokenv2::collection_object(token);
+        //add to asset type
+        let asset_type_id = eragon_asset_type::upsert_collection_by_id<Collection>(collectionObj);
         
         //transfer ownership
-        import_v2<T>(player,token,use_for); 
+        import_nft<T>(player,token,use_for); 
         // use for avatar
         if(use_for == SET_ASSET_FOR_AVATAR) {
-            let asset_id = get_asset_id(token);
-            eragon_avatar::set_asset(player,asset_id.type_id);
+            eragon_avatar::set_asset(player,asset_type_id,token_addr);
         };         
     }
-    public entry fun set_asset_v2_with<T: key>(player: &signer,token: Object<T>,use_for: u64) acquires AssetVault {
+    //import fungible token T : 0x1::fungible_asset::Metadata
+    public entry fun import_fungible_asset_dispatch<T: key>(player: &signer,metadata: Object<T>,amount:u64,use_for: u64) acquires AssetVault {
+
+        let  player_addr = signer::address_of(player);
+
+        let balance = primary_fungible_store::balance(player_addr, metadata);
+
+        assert!(balance >= amount,error::invalid_argument(E_FA_BALANCE_NOT_ENOUGHT));
+
+        let asset_id = get_fungible_asset_id(metadata);
+        //require while list
+        assert!(asset_id.type_id>0, error::permission_denied(E_ASSET_NOT_WHILE_LIST));
+        
+        //transfer ownership
+        import_fa_dispatch(player,metadata,amount,use_for);
+
+        let token_addr = object::object_address(&metadata);
+        // use for avatar
+        if(use_for == SET_ASSET_FOR_AVATAR) {
+            eragon_avatar::set_asset(player,asset_id.type_id,token_addr);
+        }; 
+    }
+    // imported then set use with avatar
+    public entry fun set_digital_asset_with<T: key>(player: &signer,token: Object<T>,use_for: u64,ts: u64,rec_id: u8, signature: vector<u8>) acquires AssetVault {
 
         let  player_addr = signer::address_of(player);
         assert!(exists<AssetVault>(player_addr),error::invalid_state(E_ASSET_NOT_IMPORT));
 
         let assetVault = borrow_global_mut<AssetVault>(player_addr);
 
-        let asset_id = get_asset_id(token);
+        let asset_id = get_nft_asset_id(token);
         
         let found = simple_map::contains_key<AssetId,u64>(&assetVault.tracking, &asset_id);
 
         assert!(found,error::invalid_state(E_ASSET_NOT_FOUND));
+
+        let token_addr = object::object_address(&token);
+
+        verify_signature(b"set_digital_asset_with",player_addr,token_addr,SET_NFT_ASSET,ts,rec_id,signature);
 
         simple_map::upsert<AssetId,u64>(&mut assetVault.tracking, asset_id, use_for);
 
+        
         if(use_for == SET_ASSET_FOR_AVATAR){
-            eragon_avatar::set_asset(player,asset_id.type_id);
+            eragon_avatar::set_asset(player,asset_id.type_id,token_addr);
         }
     }
-    public entry fun unset_asset_v2_with<T: key>(player: &signer,token: Object<T>) acquires AssetVault {
+    public entry fun unset_digital_asset_with<T: key>(player: &signer,token: Object<T>,ts: u64,rec_id: u8, signature: vector<u8>) acquires AssetVault {
 
         let  player_addr = signer::address_of(player);
         assert!(exists<AssetVault>(player_addr),error::invalid_state(E_ASSET_NOT_IMPORT));
 
         let assetVault = borrow_global_mut<AssetVault>(player_addr);
 
-        let asset_id = get_asset_id(token);
+        let asset_id = get_nft_asset_id(token);
         
         let found = simple_map::contains_key<AssetId,u64>(&assetVault.tracking, &asset_id);
 
         assert!(found,error::invalid_state(E_ASSET_NOT_FOUND));
+
+        let token_addr = object::object_address(&token);
+
+        verify_signature(b"unset_digital_asset_with",player_addr,token_addr,UNSET_NFT_ASSET,ts,rec_id,signature);
 
         let use_for = simple_map::borrow_mut<AssetId,u64>(&mut assetVault.tracking, &asset_id);
 
         if(*use_for == SET_ASSET_FOR_AVATAR){
-            eragon_avatar::unset_asset(player,asset_id.type_id);
+            eragon_avatar::unset_asset(player,asset_id.type_id,token_addr);
         };
         *use_for = 0;
     }
-    fun import_v2<T: key>(player: &signer,token:Object<T>,use_for: u64) acquires AssetVault {
+    public entry fun claim_digital_asset<T: key>(player: &signer,token: Object<T>) acquires AssetVault {
+        claim_nft<T>(player,token);
+    }
+    public entry fun claim_digital_asset_sig<T: key>(player: &signer,token: Object<T>,ts: u64,rec_id: u8, signature: vector<u8>) acquires AssetVault {
+        
+        let  player_addr = signer::address_of(player);
+        let token_addr = object::object_address(&token);
+
+        verify_signature(b"claim_digital_asset_sig",player_addr,token_addr,NFT_EXPORT,ts,rec_id,signature);
+
+        claim_nft<T>(player,token);
+    }
+    public entry fun claim_fungible_asset_dispatch<T: key>(player: &signer,metadata: Object<T>,amount: u64) acquires AssetVault {
+        claim_fa_dispatch<T>(player,metadata,amount);
+    }
+    fun import_nft<T: key>(player: &signer,token:Object<T>,use_for: u64) acquires AssetVault {
 
         let  player_addr = signer::address_of(player);
 
@@ -214,109 +252,56 @@ module eragon::eragon_asset {
         let recipient = assetVault.resource_addr;
         //transfer
         object::transfer(player, token, recipient);
-        let asset_id = get_asset_id(token);
+        let asset_id = get_nft_asset_id(token);
         //add tracking
         simple_map::upsert<AssetId,u64>(&mut assetVault.tracking, asset_id, use_for);
         //update quantity 
         let quantity = &mut assetVault.quantity;
-        let amount= update_quantity(quantity,asset_id.type_id,false);
+        update_quantity(quantity,asset_id.type_id,1,false);
 
         0x1::event::emit( 
             AssetEvent {
                 owner: player_addr,
                 asset: asset_id,
                 use_for: use_for,
-                is_import: true
+                event_type: NFT_IMPORT
             }
         );
     }
-    public fun import_v1(player:  &signer,asset_id: AssetId,token_id: TokenId,amount: u64,use_for: u64) acquires AssetVault {
+    fun import_fa_dispatch<T: key>(player: &signer,metadata: Object<T>,amount: u64,use_for: u64) acquires AssetVault {
+
         let  player_addr = signer::address_of(player);
-        
-        let token = tokenv1::withdraw_token(player, token_id, amount);
 
         if (!exists<AssetVault>(player_addr)) {
             initialize_player_vault(player)
         };
+
         let assetVault = borrow_global_mut<AssetVault>(player_addr);
-        let resource_signer = account::create_signer_with_capability(&assetVault.resource_cap);
-        tokenv1::deposit_token(&resource_signer,token);
-        //kep track
+
+        let receiver_address = assetVault.resource_addr;
+        
+        // transfer from player to RA addr
+        let player_store = primary_fungible_store::ensure_primary_store_exists(player_addr, metadata);
+        let receiver_store = primary_fungible_store::ensure_primary_store_exists(receiver_address, metadata);
+        dispatchable_fungible_asset::transfer(player, player_store, receiver_store, amount);
+
+        let asset_id = get_fungible_asset_id(metadata);
+        //add tracking
         simple_map::upsert<AssetId,u64>(&mut assetVault.tracking, asset_id, use_for);
-
+        //update quantity 
         let quantity = &mut assetVault.quantity;
-        let amount= update_quantity(quantity,asset_id.type_id,false);
+        update_quantity(quantity,asset_id.type_id,amount,false);
 
-        if(use_for == SET_ASSET_FOR_AVATAR){
-            eragon_avatar::set_asset(player,asset_id.type_id);
-        };
         0x1::event::emit( 
             AssetEvent {
                 owner: player_addr,
                 asset: asset_id,
                 use_for: use_for,
-                is_import: true
+                event_type: FA_IMPORT
             }
         );
     }
-
-    public entry fun claim_token_v1(
-        player: signer,
-        creator: address,
-        collection_name: String,
-        token_name: String,
-        property_version: u64,
-    ) acquires AssetVault {
-        let token_id = tokenv1::create_token_id_raw(creator, collection_name, token_name, property_version);
-        let asset_id = create_asset_id(creator,collection_name,token_name,property_version,option::none());
-        claim_v1(&player,asset_id, token_id);
-    }
-    public entry fun claim_token_v2<T: key>(player: &signer,token: Object<T>) acquires AssetVault {
-        claim_v2<T>(player,token);
-    }
-    public entry fun claim_sig_token_v2<T: key>(player: &signer,token: Object<T>,ts: u64,rec_id: u8, signature: vector<u8>) acquires AssetVault {
-        
-        let  player_addr = signer::address_of(player);
-        let token_addr = object::object_address(&token);
-
-        verify_signature(b"claim_sig_token_v2",player_addr,token_addr,false,ts,rec_id,signature);
-
-        claim_v2<T>(player,token);
-    }
-    public fun claim_v1(player: &signer,asset_id: AssetId, token_id: TokenId) acquires AssetVault {
-        let player_addr =signer::address_of(player);
-        assert!(exists<AssetVault>(player_addr), error::invalid_state(E_TOKEN_IMPORT_NOT_EXIST));
-
-        let assetVault = borrow_global_mut<AssetVault>(player_addr);
-        let tracking = &mut assetVault.tracking;
-
-        let amount = tokenv1::balance_of(assetVault.resource_addr,token_id);
-
-        assert!(amount>0,error::invalid_state(E_TOKEN_AMOUNT_NOT_ENOUGHT));
-
-        let resource_signer = account::create_signer_with_capability(&assetVault.resource_cap);
-
-        let tokens = tokenv1::withdraw_token(&resource_signer, token_id,amount);
-        tokenv1::deposit_token(player, tokens);
-
-        let quantity = &mut assetVault.quantity;
-        let amount= update_quantity(quantity,asset_id.type_id,true);
-
-        let (_,use_for) = simple_map::remove<AssetId,u64>(tracking,&asset_id);
-        
-        if(amount==0 && use_for == SET_ASSET_FOR_AVATAR){
-            eragon_avatar::unset_asset(player,asset_id.type_id);
-        };
-        0x1::event::emit( 
-            AssetEvent {
-                owner: player_addr,
-                asset: asset_id,
-                use_for: use_for,
-                is_import: false
-            }
-        );
-    }
-    fun claim_v2<T: key>(player: &signer,token: Object<T>) acquires AssetVault {
+    fun claim_nft<T: key>(player: &signer,token: Object<T>) acquires AssetVault {
         
         let player_addr =signer::address_of(player);
         assert!(exists<AssetVault>(player_addr), error::invalid_state(E_TOKEN_IMPORT_NOT_EXIST));
@@ -327,21 +312,17 @@ module eragon::eragon_asset {
         let resource_signer = account::create_signer_with_capability(&assetVault.resource_cap);
         object::transfer(&resource_signer, token, player_addr);
         //remove
-        let creator  = tokenv2::creator(token);
-        let collection_name = tokenv2::collection_name(token);
-        let token_name = tokenv2::name(token);
-        let index = tokenv2::index(token);
         let token_addr = object::object_address(&token);
         //alway v2
-        let asset_id = create_asset_id(creator, collection_name, token_name, index,option::some<address>(token_addr));
+        let asset_id = get_nft_asset_id(token);
         //remove use asset for
         let(_,use_for) = simple_map::remove<AssetId,u64>(&mut assetVault.tracking, &asset_id);
 
         let quantity = &mut assetVault.quantity;
-        let amount= update_quantity(quantity,asset_id.type_id,true);
+        update_quantity(quantity,asset_id.type_id,1,true);
 
-        if(amount==0 && use_for == SET_ASSET_FOR_AVATAR){
-            eragon_avatar::unset_asset(player,asset_id.type_id);
+        if(use_for == SET_ASSET_FOR_AVATAR){
+            eragon_avatar::unset_asset(player,asset_id.type_id,token_addr);
         };
 
         0x1::event::emit( 
@@ -349,37 +330,97 @@ module eragon::eragon_asset {
                 owner: player_addr,
                 asset: asset_id,
                 use_for: use_for,
-                is_import: false
+                event_type: NFT_EXPORT
             }
         );
         
     }
-    fun get_asset_id<T: key>(token: Object<T>): AssetId {
-        let creator  = tokenv2::creator(token);
-        let collection_name = tokenv2::collection_name(token);
-        let token_name = tokenv2::name(token);
-        let index = tokenv2::index(token);
-        let token_addr = object::object_address(&token);
-        //alway v2
-        let asset_id = create_asset_id(creator, collection_name, token_name, index,option::some<address>(token_addr));
-        asset_id
+    fun claim_fa_dispatch<T: key>(player: &signer,metadata: Object<T>,amount: u64) acquires AssetVault {
+        
+        let player_addr =signer::address_of(player);
+        assert!(exists<AssetVault>(player_addr), error::invalid_state(E_FA_IMPORT_NOT_EXIST));
+
+        let assetVault = borrow_global_mut<AssetVault>(player_addr);
+
+        let balance = primary_fungible_store::balance(assetVault.resource_addr, metadata);
+
+        assert!(balance>=amount, error::invalid_state(E_RA_BALANCE_NOT_ENOUGHT));
+
+        //get id
+        let asset_id = get_fungible_asset_id(metadata);
+
+        let importAmount = simple_map::borrow<u64,u64>(&assetVault.quantity,&asset_id.type_id);
+        assert!(*importAmount>=amount, error::invalid_state(E_FA_IMPORT_NOT_ENOUGHT));
+
+        //check player import
+
+        let resource_signer = account::create_signer_with_capability(&assetVault.resource_cap);
+
+        // transfer from RA to player
+        let ra_store = primary_fungible_store::ensure_primary_store_exists(assetVault.resource_addr, metadata);
+        let receiver_store = primary_fungible_store::ensure_primary_store_exists(player_addr, metadata);
+        dispatchable_fungible_asset::transfer(&resource_signer, ra_store, receiver_store, amount);
+
+        let quantity = &mut assetVault.quantity;
+        let currentAmount = update_quantity(quantity,asset_id.type_id,amount,true);
+        
+        let use_for: u64 =0;
+        if(currentAmount == 0 ){
+            //remove
+            //remove use asset for if claim all
+            (_,use_for) = simple_map::remove<AssetId,u64>(&mut assetVault.tracking, &asset_id);
+
+            let token_addr = object::object_address(&metadata);
+            if(use_for == SET_ASSET_FOR_AVATAR){
+                eragon_avatar::unset_asset(player,asset_id.type_id,token_addr);
+            };
+        };
+
+        0x1::event::emit( 
+            AssetEvent {
+                owner: player_addr,
+                asset: asset_id,
+                use_for: use_for,
+                event_type: FA_EXPORT
+            }
+        );
     }
-    fun update_quantity(quantity: &mut SimpleMap<u64,u64>, type_id: u64,decreate:bool): u64 {
-        let final =0;
+    // NFT or Fungible Metatada
+    fun get_nft_asset_id<T: key>(token: Object<T>): AssetId {
+
+        let token_addr = object::object_address(&token);
+        let collectionObj = tokenv2::collection_object(token);
+        let collection_addr = object::object_address(&collectionObj);
+        let type_id = eragon_asset_type::get_asset_type(collection_addr);
+        AssetId {
+            type_id,
+            object_id: token_addr
+        }
+    }
+    fun get_fungible_asset_id<T:key>(metadata: Object<T>): AssetId {
+
+        let token_addr = object::object_address(&metadata);
+        let type_id = eragon_asset_type::get_asset_type(token_addr);
+        AssetId {
+            type_id,
+            object_id: token_addr
+        }
+    }
+    fun update_quantity(quantity: &mut SimpleMap<u64,u64>, type_id: u64, qtity: u64, decreate:bool): u64 {
+        let final:u64;
         if(decreate){
             let amount = simple_map::borrow_mut<u64,u64>(quantity,&type_id);
-            if(*amount>0){
-                *amount =*amount - 1;
-            };
+            assert!( *amount >= qtity , error::invalid_argument(E_FA_IMPORT_NOT_ENOUGHT));
+            *amount =*amount - qtity;
             final=*amount;
         } else {
             let found = simple_map::contains_key<u64,u64>(quantity,&type_id);
             if(found){
                 let amount = simple_map::borrow_mut<u64,u64>(quantity,&type_id);
-                *amount =*amount +1;
+                *amount =*amount +qtity;
                 final = *amount;
             } else {
-                final =1;
+                final =qtity;
                 simple_map::upsert<u64,u64>(quantity, type_id, final);
             };
         };
@@ -390,7 +431,7 @@ module eragon::eragon_asset {
         func: vector<u8>,
         owner_addr: address,
         asset_addr: address,
-        is_import: bool,
+        sig_type: u64,
         ts: u64,
         rec_id: u8,
         signature: vector<u8>
@@ -401,7 +442,7 @@ module eragon::eragon_asset {
             func: func,
             owner: owner_addr,
             asset_addr,
-            is_import,
+            sig_type,
             ts: ts
         };
         let msg_bytes = to_bytes(&message);
@@ -424,30 +465,20 @@ module eragon::eragon_asset {
         );
     }
     #[view]
-    public fun get_import_asset(player_addr: address): (vector<AssetId>,vector<u64>) acquires AssetVault {
+    // return
+    // first : array asset type id
+    // second: amount of each asset type id
+    // third : detail asset id
+    public fun get_import_asset(player_addr: address): (vector<u64>,vector<u64>,vector<AssetId>) acquires AssetVault {
         let assetIds:vector<AssetId> = vector::empty();
+        let typeIds : vector<u64> = vector::empty();
         let amounts : vector<u64> = vector::empty();
         if(exists<AssetVault>(player_addr)){
             let assetVault = borrow_global<AssetVault>(player_addr);
-            let tracking = assetVault.tracking;
-            let holderAddr = assetVault.resource_addr;
-            (assetIds,_) = simple_map::to_vec_pair<AssetId,u64>(tracking);
-            let index = 0;
-            let len = vector::length<AssetId>(&assetIds);
-            while (index < len) {
-                let aId = vector::borrow<AssetId>(&assetIds, index);
-                let amount =1;
-                //token v1
-                if(option::is_none<address>(&aId.object_id)){
-                    let (creator,collection) = eragon_asset_type::find_by_asset_type(aId.type_id);
-                    let token_id=tokenv1::create_token_id_raw(creator, collection, aId.name, aId.property_version);
-                    amount = tokenv1::balance_of(holderAddr,token_id);
-                };
-                vector::push_back<u64>(&mut amounts,amount);
-                index = index + 1;
-            };
+            (assetIds,_) = simple_map::to_vec_pair<AssetId,u64>(assetVault.tracking);
+            (typeIds,amounts) = simple_map::to_vec_pair<u64,u64>(assetVault.quantity);
         };
-        (assetIds,amounts)
+        (typeIds,amounts,assetIds)
     }
     #[view] 
     public fun get_player_holder_asset(player_addr:address): address acquires AssetVault {
@@ -457,61 +488,34 @@ module eragon::eragon_asset {
         };
         addr
     }
-    #[view]
-    public fun create_asset_id(creator: address,collection: String, name: String,property_version:u64,object_id: Option<address>): AssetId {
-        let type_id = eragon_asset_type::get_asset_type(creator,collection);
-        AssetId {
-            type_id,
-            name,
-            property_version,
-            object_id
-        }
-    }
-    #[test(creator = @0x1, owner = @0x2,owner2 =@0x3)]
-    public fun test_nft(creator: signer, owner: signer, owner2:signer) acquires AssetVault {
-        let (token_data_id, token_id,token_data_id2,token_id2) = create_token(&creator, 1);
-        let creator_addr = signer::address_of(&creator);
-        let creator_bal = tokenv1::balance_of(creator_addr,token_id);
-        std::debug::print(&utf8(b"-----Balance of creator -----"));
-        std::debug::print(&creator_bal);
-        
-        let owner_addr = signer::address_of(&owner);
-        aptos_framework::account::create_account_for_test(owner_addr);
-        //transfer
-        tokenv1::direct_transfer(&creator, &owner, token_id, 1);
-        //token id 2
-        tokenv1::direct_transfer(&creator, &owner, token_id2, 1);
-        //---
-        creator_bal = tokenv1::balance_of(creator_addr,token_id);
-        std::debug::print(&utf8(b"-----Balance of creator after transfer -----"));
-        std::debug::print(&creator_bal);
-        //--
-        let owner_bal = tokenv1::balance_of(owner_addr,token_id);
-        std::debug::print(&utf8(b"-----Balance of owner -----"));
-        std::debug::print(&owner_bal);
-        //
-        import_v1(&owner, token_id, 1,2);
-        import_v1(&owner, token_id2, 1,2);
-        let (tokenIds,amounts) = get_import_asset(owner_addr);
-        std::debug::print(&utf8(b"-----Owner import asset list -----"));
-        std::debug::print(&tokenIds);
-        std::debug::print(&amounts);
-        //
-        owner_bal = tokenv1::balance_of(owner_addr,token_id);
-        std::debug::print(&utf8(b"-----Balance of owner after import -----"));
-        std::debug::print(&owner_bal);
-        //
-        claim_v1(&owner, token_id);
-        owner_bal = tokenv1::balance_of(owner_addr,token_id);
-        std::debug::print(&utf8(b"-----Balance of owner after claim -----"));
-        std::debug::print(&owner_bal);
-
-        create_token_v2(&creator,&owner,&owner2);
-        
-    }
     #[test_only]
-    public fun create_token_v2(creator: &signer, owner1: &signer,owner2: &signer) acquires AssetVault {
+    use eragon::eragon_coin::{Self};
+
+    #[test_only]
+    fun mint_fungible(creator: &signer, owner_address: address,owner_address1: address,amount:u64){
+        eragon_coin::initial_test(creator);
+        let creator_address = signer::address_of(creator);
+    
+        //mint
+        let max=10000;
+        eragon_coin::mint(creator, creator_address, max);
+
+        //get metadata
+        let asset = eragon_coin::get_metadata();
+
+        assert!(primary_fungible_store::balance(creator_address, asset) == max, 4);
+        //transfer
+        eragon_coin::transfer(creator, creator_address, owner_address, amount);
+        assert!(primary_fungible_store::balance(owner_address, asset) == amount, 6);
+        eragon_coin::transfer(creator, creator_address, owner_address1, amount);
+
+    }
+   #[test(admin=@eragon,creator = @0x2, owner1 = @0x3,owner2 =@0x4)]
+    public fun test_import_claim(admin: &signer,creator: &signer, owner1: &signer,owner2: &signer) acquires AssetVault {
         use std::string::{Self, String};
+        use aptos_token_objects::aptos_token::{Self};
+
+        eragon_asset_type::initial_test(admin);
 
         let collection_name = string::utf8(b"Collectio name:Thongvv");
         let collection_mutation_setting = vector<bool>[false, false, false];
@@ -519,17 +523,9 @@ module eragon::eragon_asset {
         let creator_address = signer::address_of(creator);
         aptos_framework::account::create_account_for_test(creator_address);
         //---------------token v2
-        //create collection
-       // collection::create_fixed_collection(creator, string::utf8(b""), 1, collection_name, option::none(), string::utf8(b""));
-        // re check
-        //let collection_address = collection::create_collection_address(&creator_address, &collection_name);
-        //let collectionObj = object::address_to_object<Collection>(collection_address);
-        //let foundv2 = collection::creator(collectionObj);
-        //std::debug::print(&utf8(b"-----Check collection V2 by  creator addr and collection name ? -----"));
-        //std::debug::print(&foundv2);
-        //now create aptos collection
+
         let flag =true;
-        aptos_token::create_collection_object(
+        let collectionObj = aptos_token::create_collection_object(
             creator,
             string::utf8(b"collection description"),
             100, // max supply
@@ -547,6 +543,8 @@ module eragon::eragon_asset {
             1,
             100,
         );
+        //add to whilelist
+        //eragon_asset_type::upsert_collection_by_id(collectionObj);
         //mint token
         let token_name = string::utf8(b"Token v2 name");
         let token = aptos_token::mint_token_object(
@@ -560,120 +558,65 @@ module eragon::eragon_asset {
             vector[vector[0x01]],
         );
         let token_addr = object::object_address(&token);
-        std::debug::print(&utf8(b"-----Before--Addr of token -----"));
-        std::debug::print(&token_addr);
-
-        assert!(object::owner(token) == signer::address_of(creator), 1);
+        
         let ownerAddr1 = signer::address_of(owner1);
+        let ownerAddr2 = signer::address_of(owner2);
         //transfer
         object::transfer(creator, token, ownerAddr1);
 
         token_addr = object::object_address(&token);
-        std::debug::print(&utf8(b"-----After---Addr of token -----"));
-        std::debug::print(&token_addr);
-
+        
         let currentOwner = object::owner(token);
         std::debug::print(&utf8(b"-----Current owner of token -----"));
         std::debug::print(&currentOwner);
 
         //import
-        import_token_v2(owner1,token,1);
+        //import_digital_asset(owner1,token,1);
+        import_digital_asset_sig(owner1,token,SET_ASSET_FOR_AVATAR,0,0,vector::empty());
         currentOwner = object::owner(token);
         std::debug::print(&utf8(b"-----After import: owner of token -----"));
         std::debug::print(&currentOwner);
-        let addr = get_player_holder_asset(ownerAddr1);
-        std::debug::print(&utf8(b"-----Hold(RA): -----"));
-        std::debug::print(&addr);
+        
         //export
-        claim_token_v2(owner1,token);
+        //claim_digital_asset(owner1,token);
+        
+
         currentOwner = object::owner(token);
         std::debug::print(&utf8(b"-----After export: owner of token -----"));
         std::debug::print(&currentOwner);
-        //let tokenAddr = tokenv2::create_token_address(&creator_address,&collection_name,&token_name);
         
 
-        //let constructor_ref = object::create_object(creator_address);
-        //let obj= object::object_from_constructor_ref(&constructor_ref);
-        //let addr=object::object_address(&obj);
-        // aptos_token_addr = object::address_from_constructor_ref(&constructor_ref);
+        //fungible token
+        //get metadata
+        mint_fungible(admin,ownerAddr1,ownerAddr2,15);
 
-        //std::debug::print(&utf8(b"-----Generate addr of token -----"));
-        //std::debug::print(&addr);
-        
-    }
-    #[test_only]
-    public fun create_token(creator: &signer, amount: u64): (TokenDataId,TokenId,TokenDataId,TokenId) {
-        use std::string::{Self, String};
+        let asset = eragon_coin::get_metadata();
 
-        let collection_name = string::utf8(b"Collectio name:Thongvv");
-        let collection_mutation_setting = vector<bool>[false, false, false];
+        let owner1Balance = primary_fungible_store::balance(ownerAddr1, asset);
+        std::debug::print(&utf8(b"-----Fungible asset: balance -----"));
+        std::debug::print(&owner1Balance);
+
+        //import
+        import_fungible_asset_dispatch(owner1,asset,10,SET_ASSET_FOR_AVATAR);
+        import_fungible_asset_dispatch(owner2,asset,10,SET_ASSET_FOR_AVATAR);
+
+        owner1Balance = primary_fungible_store::balance(ownerAddr1, asset);
+        std::debug::print(&utf8(b"-----Fungible asset: balance after import -----"));
+        std::debug::print(&owner1Balance);
+        //export
+        claim_fa_dispatch(owner1,asset,10);
+
+        owner1Balance = primary_fungible_store::balance(ownerAddr1, asset);
+        std::debug::print(&utf8(b"-----Fungible asset: balance after claim -----"));
+        std::debug::print(&owner1Balance);
+
+
+        // transfer from minter to receiver, check balance
+        //let minter_store = primary_fungible_store::ensure_primary_store_exists(minter_address, asset);
+    
+
+        //let receiver_store = primary_fungible_store::ensure_primary_store_exists(receiver_address, asset);
+        //dispatchable_fungible_asset::transfer(minter, minter_store, receiver_store, 10);
         
-        let creator_address = signer::address_of(creator);
-        aptos_framework::account::create_account_for_test(creator_address);
-        
-        tokenv1::create_collection(
-            creator,
-            collection_name,
-            string::utf8(b"Collection: Hello, World"),
-            string::utf8(b"https://aptos.dev"),
-            2, // max nft in collection
-            collection_mutation_setting,
-        );
-        //check exit
-        let foundv1 = tokenv1::check_collection_exists(creator_address,collection_name);
-        std::debug::print(&utf8(b"-----Check collection V1 by  creator addr and collection name ? -----"));
-        std::debug::print(&foundv1);
-        //
-        let token_mutation_setting = vector<bool>[false, false, false, false, true];
-        let default_keys = vector<String>[string::utf8(b"attack"), string::utf8(b"num_of_use")];
-        let default_vals = vector<vector<u8>>[b"10", b"5"];
-        let default_types = vector<String>[string::utf8(b"integer"), string::utf8(b"integer")];
-        tokenv1::create_token_script(
-            creator,
-            collection_name,
-            string::utf8(b"Token Name:Token 1"), //token name
-            string::utf8(b"Hello, Token"), //description
-            amount, //  balance
-            amount, // max allow( 1 -> nft)
-            string::utf8(b"https://aptos.dev"),
-            signer::address_of(creator),
-            100,
-            0,
-            token_mutation_setting,
-            default_keys,
-            default_vals,
-            default_types,
-        );
-        let tokenId1=tokenv1::create_token_id_raw(
-            signer::address_of(creator),
-            collection_name,
-            string::utf8(b"Token Name:Token 1"),
-            0
-        );
-        let token_data_id1 = tokenv1::create_token_data_id(signer::address_of(creator),collection_name,string::utf8(b"Token Name:Token 1"));
-        tokenv1::create_token_script(
-            creator,
-            collection_name,
-            string::utf8(b"Token Name:Token 2"),
-            string::utf8(b"Hello, Token"),
-            amount,
-            amount,
-            string::utf8(b"https://aptos.dev"),
-            signer::address_of(creator),
-            100,
-            0,
-            token_mutation_setting,
-            default_keys,
-            default_vals,
-            default_types,
-        );
-        let token_data_id2 = tokenv1::create_token_data_id(signer::address_of(creator),collection_name,string::utf8(b"Token Name:Token 2"));
-        let tokenId2=tokenv1::create_token_id_raw(
-            signer::address_of(creator),
-            collection_name,
-            string::utf8(b"Token Name:Token 2"),
-            0
-        );
-        (token_data_id1, tokenId1,token_data_id2,tokenId2)
     }
 }

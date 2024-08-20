@@ -307,7 +307,7 @@ module eragon::eragon_lucky_wheel {
         for (i in 0..reward_length) {
             let reward_setting = vector::borrow<RewardSetting>(&season.reward_settings, i);
             let remain_fund = vector::borrow_mut<u64>(&mut pool.remain_funds, i);
-            let random_value = random::random_by_weights(reward_setting.weights);
+            let random_value = random::random_by(reward_setting.weights);
             let base_amount = vector::borrow<u64>(&reward_setting.rewards, random_value);
             let halving = calculate_halving_per_6h(reward_setting.fund_per_pool, *remain_fund, start);
             let amount: u64 = *base_amount >> halving;
