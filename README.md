@@ -1,7 +1,7 @@
 # Product Overview
 
 [ERAGON](https://eragon.gg/) No.1 development & distribution platform for Web3 Mobile Games on Aptos with 50K+ users, 2M+ transactions, 70K+ Community Members, 50+ Partners & more. Backed by [Aptos](https://aptosfoundation.org/),[Sotatek](https://www.sotatek.com/) & [VNext](https://vnextglobal.com/).
-ERAGON offers an unparalleled solution for developers, gamers, and investors. 🎴Full [Deck](https://docsend.com/view/tpvrm7pqygnphai2). (https://docsend.com/view/4tvq9r5jk7ndtgz8)  (https://docsend.com/view/hhvnsdcm7f55bxc8)
+ERAGON offers an unparalleled solution for developers, gamers, and investors
 
 ### Innovative Solutions
 * Platform as a Game
