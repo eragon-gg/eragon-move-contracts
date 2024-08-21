@@ -1,28 +1,51 @@
-# Project Overview
+# Product Overview
 
-Eragon is all-in-one development & distribution platform for Web3 Mobile Games. It include many common feature which useful for many Game studio such as quest,loyalty,asset mangament...so that Game studio only focus for game core.
+[ERAGON](https://eragon.gg/) No.1 development & distribution platform for Web3 Mobile Games on Aptos with 50K+ users, 2M+ transactions, 70K+ Community Members, 50+ Partners & more. Backed by [Aptos](https://aptosfoundation.org/),[Sotatek](https://www.sotatek.com/) & [VNext](https://vnextglobal.com/).
+ERAGON offers an unparalleled solution for developers, gamers, and investors. 🎴Full [Deck](https://docsend.com/view/tpvrm7pqygnphai2). (https://docsend.com/view/4tvq9r5jk7ndtgz8)  (https://docsend.com/view/hhvnsdcm7f55bxc8)
 
-Now It has launched on Aptos mainnet on Q2 2024
+### Innovative Solutions
+* Platform as a Game
+* Keyless Account Design
+* Gaming Layer as Web3 Bridge
+* Redefining Money Streams
+* Mobile Focus
+* Breaking CHPlay, Appstore Barriers
+* AI-powered Solutions
+### Key Features
+* Free Minting $EGON
+* Incentivized Earnings
+* Loyalty Quests
+* Games & Marketplace Store
+* Game Listing & Launchpad
+* Developer Account & Kit
+* Paygate for Fiat & Token Top-ups
+* Eraverse Meta-world Experience
 
 ## Description
 
-This is source code smart contract on Aptos blockchain.It provide common on-chain features such as import/export asset to platform, set/unset asset for specifice features such as Avatar and daily check-in and lucky wheel
+This project is part of [Eragon] product and provide common on-chain features such as import/export asset to platform, set/unset asset for specific features such as Avatar and daily check-in and lucky wheel,...It also provider some features for Operator maintain such as add/remove whilelist asset,upgrade random weigh... 
 
 ## Getting Started
 
 ### Dependencies
 
-* Nodejs version > 14
-* Install Aptos CLI version > 3.4 -> detail here: https://aptos.dev/en/build/cli
+* Nodejs version >= 14
+* Install Aptos CLI version >= 3.4 -> detail here: https://aptos.dev/en/build/cli
 
 ### Installing
 
 * clone repository: git clone https://github.com/eragon-gg/eragon-move-contracts.git
 * install packages: npm install
 * initial Aptos account for deploy: 
+    ```
     * aptos init --profile deployer
+    ```
+    ```
     * aptos init --profile operator
+    ```
+    ```
     * aptos init --profile player
+    ```
 
 ### Compiles
 ```
