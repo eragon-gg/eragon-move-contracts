@@ -23,7 +23,7 @@ ERAGON offers an unparalleled solution for developers, gamers, and investors. ðŸ
 
 ## Description
 
-This project is part of [Eragon] product and provide common on-chain features such as import/export asset to platform, set/unset asset for specific features such as Avatar and daily check-in and lucky wheel,...It also provider some features for Operator maintain such as add/remove whilelist asset,upgrade random weigh... 
+This project is part of [Eragon](https://eragon.gg) product and provide common on-chain features such as import/export assets on platform, set/unset asset for specific features such as Avatar ,Daily check-in and Lucky wheel,...It also provider some features for Operator maintain such as add/remove whilelist asset,upgrade random weight... 
 
 ## Getting Started
 
@@ -38,13 +38,13 @@ This project is part of [Eragon] product and provide common on-chain features su
 * install packages: npm install
 * initial Aptos account for deploy: 
     ```
-    * aptos init --profile deployer
+    aptos init --profile deployer
     ```
     ```
-    * aptos init --profile operator
+    aptos init --profile operator
     ```
     ```
-    * aptos init --profile player
+    aptos init --profile player
     ```
 
 ### Compiles
